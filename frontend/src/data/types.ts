@@ -27,6 +27,16 @@ export type PageResult = {
   size: number
 }
 
+/** 当前操作人。注意：权限判断一律以数据记录上的单位/指派人为准，这里只表示“谁在操作”。 */
+export type Actor = {
+  /** 操作人姓名 */
+  name: string
+  /** 操作人当前所在单位 */
+  unit: string
+  /** 角色：采集员 / 鉴定人 / 复核人 */
+  roles: string[]
+}
+
 export type ActionResult = {
   ok: boolean
   message: string
