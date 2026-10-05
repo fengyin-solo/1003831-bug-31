@@ -27,6 +27,24 @@ export type PageResult = {
   size: number
 }
 
+/** 操作角色：采集员维护基础信息，鉴定人提交鉴定，复核人确认复核。 */
+export type ActorRole = '采集员' | '鉴定人' | '复核人'
+
+/** 操作人上下文：单位与角色是权限口径的依据，由会话提供。 */
+export type ActorContext = {
+  operator: string
+  unit: string
+  role: ActorRole
+}
+
+export type ActionOptions = {
+  actor?: ActorContext
+  /** 乐观并发口径：动作发起时看到的记录版本，与当前版本不一致则拒绝写入。 */
+  version?: number
+  /** 提交鉴定时写入的结论（性别判定）。 */
+  conclusion?: string
+}
+
 export type ActionResult = {
   ok: boolean
   message: string

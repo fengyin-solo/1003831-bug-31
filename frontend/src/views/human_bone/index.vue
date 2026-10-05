@@ -4,6 +4,7 @@
       <div>
         <h2>人骨鉴定管理</h2>
         <p class="page-desc">维护人骨标本，围绕标本编号、出土单位、鉴定部位、性别判定做登记、筛选与状态流转。</p>
+        <p class="actor-hint">当前操作身份：{{ store.operator }} · {{ store.unit }} · {{ store.role }}</p>
       </div>
       <div class="page-actions">
         <button class="btn primary" type="button" @click="openCreate">登记人骨标本</button>
@@ -55,6 +56,7 @@
             >
               {{ action }}
             </button>
+            <button class="link" type="button" @click="openMaintain(row)">维护基础信息</button>
           </td>
         </tr>
         <tr v-if="!rows.length">
@@ -67,26 +69,62 @@
       <span>共 {{ total }} 条人骨鉴定记录</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
     </footer>
+
+    <div v-if="dialog.mode !== 'closed'" class="modal-mask" @click.self="closeDialog">
+      <div class="modal-card">
+        <h3>{{ dialogTitle }}</h3>
+        <template v-if="dialog.mode === 'identify'">
+          <p class="page-desc">提交鉴定结论，归属单位保持登记时的历史单位不变。</p>
+          <label class="form-item">
+            <span>性别判定</span>
+            <select v-model="dialog.conclusion">
+              <option>男性</option>
+              <option>女性</option>
+              <option>未知</option>
+            </select>
+          </label>
+        </template>
+        <template v-else>
+          <p v-if="dialog.mode === 'maintain'" class="page-desc">
+            仅采集单位可维护基础信息，归属单位与鉴定结论不在此修改。
+          </p>
+          <label v-for="field in editableFields" :key="field" class="form-item">
+            <span>{{ field }}</span>
+            <input v-model="dialog.form[field]" :placeholder="`请输入${field}`" />
+          </label>
+        </template>
+        <p v-if="dialog.error" class="error-text">{{ dialog.error }}</p>
+        <div class="modal-actions">
+          <button class="btn primary" type="button" @click="submitDialog">确认</button>
+          <button class="btn ghost" type="button" @click="closeDialog">取消</button>
+        </div>
+      </div>
+    </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 
 import {
   downloadEntries,
   listEntries,
+  maintainBasicInfo,
   moduleMeta,
+  registerSpecimen,
   runAction as applyAction,
 } from '@/api/local-service'
 import type { EntryRow } from '@/data/types'
+import { useSessionStore } from '@/stores/session'
 
 const meta = moduleMeta('human_bone')
-const columns = ["标本编号", "出土单位", "鉴定部位", "性别判定", "年龄范围", "病理特征", "鉴定人", "鉴定状态"]
+const columns = ["标本编号", "出土单位", "归属单位", "鉴定部位", "性别判定", "年龄范围", "病理特征", "鉴定人", "鉴定状态"]
 const actions = ["开始鉴定", "提交鉴定", "复核鉴定"]
 const statuses = ["已采集", "鉴定中", "已鉴定", "已复核", "已归档"]
 const stats = [{"label": "标本总数", "value": 0}, {"label": "已鉴定数", "value": 0}, {"label": "鉴定中数", "value": 0}]
+const editableFields = ["出土单位", "鉴定部位", "年龄范围", "病理特征"]
 
+const store = useSessionStore()
 const rows = ref<EntryRow[]>([])
 const total = ref(0)
 const errorMessage = ref('')
@@ -99,6 +137,21 @@ const statusSummary = computed(() =>
   })),
 )
 
+type DialogMode = 'closed' | 'register' | 'maintain' | 'identify'
+const dialog = reactive({
+  mode: 'closed' as DialogMode,
+  row: null as EntryRow | null,
+  form: {} as Record<string, string>,
+  conclusion: '男性',
+  error: '',
+})
+const dialogTitle = computed(() => {
+  if (dialog.mode === 'register') return '登记人骨标本'
+  if (dialog.mode === 'maintain') return `维护基础信息：${dialog.row?.['标本编号'] ?? ''}`
+  if (dialog.mode === 'identify') return `提交鉴定：${dialog.row?.['标本编号'] ?? ''}`
+  return ''
+})
+
 function resetFilters() {
   filters.value = {}
   reload()
@@ -109,16 +162,72 @@ function exportRows() {
 }
 
 function openCreate() {
-  errorMessage.value = '人骨标本登记入口尚未接入审批流'
+  dialog.mode = 'register'
+  dialog.row = null
+  dialog.form = {}
+  dialog.error = ''
+}
+
+function openMaintain(row: EntryRow) {
+  dialog.mode = 'maintain'
+  dialog.row = row
+  dialog.form = Object.fromEntries(editableFields.map((field) => [field, String(row[field] ?? '')]))
+  dialog.error = ''
+}
+
+function openIdentify(row: EntryRow) {
+  dialog.mode = 'identify'
+  dialog.row = row
+  dialog.conclusion = '男性'
+  dialog.error = ''
+}
+
+function closeDialog() {
+  dialog.mode = 'closed'
+  dialog.row = null
+  dialog.error = ''
 }
 
 function runAction(action: string, row: EntryRow) {
   errorMessage.value = ''
-  const result = applyAction(meta.key, Number(row.id), action)
+  if (action === '提交鉴定') {
+    openIdentify(row)
+    return
+  }
+  const result = applyAction(meta.key, Number(row.id), action, {
+    actor: store.actor,
+    version: Number(row.version),
+  })
   if (!result.ok) {
+    reload()
     errorMessage.value = result.message
     return
   }
+  reload()
+}
+
+function submitDialog() {
+  dialog.error = ''
+  let result
+  if (dialog.mode === 'identify' && dialog.row) {
+    result = applyAction(meta.key, Number(dialog.row.id), '提交鉴定', {
+      actor: store.actor,
+      version: Number(dialog.row.version),
+      conclusion: dialog.conclusion,
+    })
+  } else if (dialog.mode === 'maintain' && dialog.row) {
+    result = maintainBasicInfo(meta.key, Number(dialog.row.id), dialog.form, store.actor, Number(dialog.row.version))
+  } else if (dialog.mode === 'register') {
+    result = registerSpecimen(dialog.form, store.actor)
+  } else {
+    return
+  }
+  if (!result.ok) {
+    reload()
+    dialog.error = result.message
+    return
+  }
+  closeDialog()
   reload()
 }
 

@@ -11,20 +11,40 @@ function clone<T>(value: T): T {
 function readStorage(): Record<string, EntryRow[]> {
   const fallback = clone(SEED_ROWS)
   if (typeof window === 'undefined' || !window.localStorage) {
-    return fallback
+    return migrate(fallback)
   }
   const raw = window.localStorage.getItem(STORAGE_KEY)
   if (!raw) {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(fallback))
-    return fallback
+    return migrate(fallback)
   }
   try {
     const parsed = JSON.parse(raw) as Record<string, EntryRow[]>
-    return { ...fallback, ...parsed }
+    return migrate({ ...fallback, ...parsed })
   } catch {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(fallback))
-    return fallback
+    return migrate(fallback)
   }
+}
+
+// 旧数据迁移：权限口径上线前持久化的记录没有版本号和归属单位，读取时补齐，
+// 归属单位一律保留记录原有的历史单位，不随操作人单位变化。
+function migrate(rows: Record<string, EntryRow[]>): Record<string, EntryRow[]> {
+  const specimens = rows['human_bone']
+  if (Array.isArray(specimens)) {
+    for (const row of specimens) {
+      if (typeof row.version !== 'number') {
+        row.version = 1
+      }
+      if (!row['归属单位']) {
+        row['归属单位'] = String(row['出土单位'] ?? '甲单位')
+      }
+    }
+  }
+  if (!Array.isArray(rows['storage_intake'])) {
+    rows['storage_intake'] = []
+  }
+  return rows
 }
 
 let cache: Record<string, EntryRow[]> | null = null
